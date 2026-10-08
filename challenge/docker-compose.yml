@@ -1,0 +1,189 @@
+services:
+
+  # ============================================================
+  # PostgreSQL - Banco de dados do desafio
+  # ============================================================
+  postgres:
+    image: postgres:16
+    container_name: wecogno_postgres
+
+    environment:
+      POSTGRES_USER: wecogno
+      POSTGRES_PASSWORD: wecogno
+      POSTGRES_DB: taxi_db
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wecogno -d taxi_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  # ============================================================
+  # PostgreSQL - Banco interno do Airflow
+  # ============================================================
+  airflow-db:
+    image: postgres:16
+    container_name: airflow_postgres
+
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  # ============================================================
+  # Inicialização do Airflow
+  # ============================================================
+  airflow-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: wecogno-airflow-spark:2.10.5
+    container_name: airflow_init
+
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+      --username admin
+      --password admin
+      --firstname Elias
+      --lastname Nunes
+      --role Admin
+      --email admin@example.com || true
+      "
+
+
+  # ============================================================
+  # Airflow Webserver
+  # Interface: http://localhost:8080
+  # ============================================================
+  airflow-webserver:
+    image: wecogno-airflow-spark:2.10.5
+    container_name: airflow_webserver
+
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      # Banco PostgreSQL do desafio
+      TAXI_DB_HOST: postgres
+      TAXI_DB_PORT: 5432
+      TAXI_DB_NAME: taxi_db
+      TAXI_DB_USER: wecogno
+      TAXI_DB_PASSWORD: wecogno
+
+    volumes:
+      # DAGs do Airflow
+      - ./dags:/opt/airflow/dags
+
+      # Jobs PySpark
+      - ./jobs:/opt/airflow/jobs
+
+      # Logs
+      - ./logs:/opt/airflow/logs
+
+      # Scripts SQL
+      - ./sql:/opt/airflow/sql
+
+      # Arquivos NYC Taxi
+      - ../nyc-tlc-data:/opt/airflow/data
+
+    ports:
+      - "8080:8080"
+
+    command: webserver
+
+
+  # ============================================================
+  # Airflow Scheduler
+  # Executa as DAGs e os jobs Spark
+  # ============================================================
+  airflow-scheduler:
+    image: wecogno-airflow-spark:2.10.5
+    container_name: airflow_scheduler
+
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      # Banco PostgreSQL do desafio
+      TAXI_DB_HOST: postgres
+      TAXI_DB_PORT: 5432
+      TAXI_DB_NAME: taxi_db
+      TAXI_DB_USER: wecogno
+      TAXI_DB_PASSWORD: wecogno
+
+    volumes:
+      # DAGs do Airflow
+      - ./dags:/opt/airflow/dags
+
+      # Jobs PySpark
+      - ./jobs:/opt/airflow/jobs
+
+      # Logs
+      - ./logs:/opt/airflow/logs
+
+      # Scripts SQL
+      - ./sql:/opt/airflow/sql
+
+      # Arquivos NYC Taxi
+      - ../nyc-tlc-data:/opt/airflow/data
+
+    command: scheduler
+
+
+# ============================================================
+# Volumes persistentes
+#
+# IMPORTANTE:
+# Estes são os mesmos nomes do compose anterior.
+# Não executar "docker compose down -v".
+# ============================================================
+volumes:
+
+  # Dados NYC Taxi no PostgreSQL
+  postgres_data:
+
+  # Metadados do Airflow
+  airflow_db_data:
